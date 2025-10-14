@@ -1,4 +1,5 @@
 # 基于物品的协同过滤
+# Hit Rate@50: 0.158907
 from tqdm import tqdm
 
 # 构造用户和物料的交互历史
@@ -26,7 +27,7 @@ def compute_item_similarity(user_item_history):
                 if item_i == item_j:
                     continue
                 item_co_occurrence.setdefault(item_i, {})
-                item_co_occurrence[item_i][item_j] = item_co_occurrence[item_i].get(item_j, 0) + 1 if items[item_j][0] >= 4.0 else 0.5
+                item_co_occurrence[item_i][item_j] = item_co_occurrence[item_i].get(item_j, 0) + (1 if items[item_j][0] >= 3.0 else 0.5)
 
     # 计算相似度矩阵
     item_similarity = {}
