@@ -10,6 +10,7 @@ import numpy as np
 
 from DataReader.data_reader import DataReader
 from tqdm import tqdm
+from model_utils.lr_schedule import CosinDecayLR
 
 # BaseModel继承于LightningModule
 class DSSM(BaseModel):
@@ -21,13 +22,17 @@ class DSSM(BaseModel):
         self.user_fc = nn.Sequential(
             nn.Linear(self.user_input_dim, 128),
             nn.ReLU(),
-            nn.Linear(128, 16)
+            nn.Linear(128, 64),
+            nn.ReLU(),
+            nn.Linear(64, 16)
         )
         
         self.item_fc = nn.Sequential(
             nn.Linear(self.item_input_dim, 128),
             nn.ReLU(),
-            nn.Linear(128, 16)
+            nn.Linear(128, 64),
+            nn.ReLU(),
+            nn.Linear(64, 16)
         )
         
         self.movies_dataloader = dataloaders.get('movies_dataloader', None)
@@ -54,18 +59,23 @@ class DSSM(BaseModel):
 
         return user_emb, item_emb, neg_item_emb
 
-    def triplet_loss(self, user_emb, pos_item_emb, neg_item_emb, margin=1.0):
+    def triplet_loss(self, user_emb, pos_item_emb, neg_item_emb, margin=1.0, mask=None):
         pos_scores = torch.sum(user_emb * pos_item_emb, dim=1)
         neg_scores = torch.sum(user_emb * neg_item_emb, dim=1)
         losses = F.relu(margin - pos_scores + neg_scores)
+        if mask is not None:
+            losses = losses * mask
         return losses.mean()
 
     def training_step(self, batch, batch_idx):
         user_emb, item_emb, neg_item_emb = self.forward(batch)
-        # 计算三元组损失
-        loss = self.triplet_loss(user_emb, item_emb, neg_item_emb)
+        # 计算三元组损失, recall阶段只使用正样本，负样本是batch内随机采样的其他item
+        mask = batch['label'][:, 1] # 获取mask
+        loss = self.triplet_loss(user_emb, item_emb, neg_item_emb, mask=mask)
         
         self.log('train_loss', loss)
+        # 记录当前学习率
+        self.log('lr', self.optimizers().param_groups[0]['lr'])
         return loss
 
 
@@ -76,8 +86,17 @@ class DSSM(BaseModel):
         pass
 
     def configure_optimizers(self):
-        optimizer = torch.optim.Adam(self.parameters(), lr=0.001)
-        return optimizer
+        optimizer = torch.optim.AdamW(self.parameters(), lr=3e-3, betas=(0.9, 0.999))
+        lr_scheduler = CosinDecayLR(optimizer, lrs=[3e-3, 1e-6], milestones=[60000, 200000])
+        return {
+            'optimizer': optimizer,
+            'lr_scheduler': {
+                'scheduler': lr_scheduler,
+                'interval': 'step',  # 每个训练步骤调用一次
+                'frequency': 1
+            }
+
+        }
 
     def get_user_embedding(self, batch):
         user_embeddings = []
@@ -137,30 +156,31 @@ class DSSM(BaseModel):
                 if targets[i] in I[i]:
                     hits_num += 1
         hit_rate = hits_num / len(self.val_dataloader_.dataset)
-        self.log('val_hit_rate', hit_rate)
+        self.log('Hit_Rate_50', hit_rate)
         print(f"Hit Rate@{k}: {hit_rate}")
 
     @torch.no_grad()
     def on_train_epoch_end(self):
-        all_item_embeddings = []
-        self.idx_item_emb_dic = {}
-        idx = 0
-        for batch in tqdm(self.movies_dataloader, desc="Building Item Embeddings", ncols=100):
-            for key in batch:
-                if isinstance(batch[key], torch.Tensor):
-                    batch[key] = batch[key].to(self.device)
-            item_vector = self.get_item_embedding(batch)  # 获取物品特征向量
-            item_emb = self.item_fc(item_vector)  # 物品特征通过全连接层  bx16
-            item_emb = F.normalize(item_emb, p=2, dim=1)
-            item_emb = item_emb.cpu().numpy()
-            all_item_embeddings.append(item_emb)
-            for i, item_id in enumerate(batch[2].cpu().numpy()): # 2是item id的slot_id
-                self.idx_item_emb_dic[idx] = item_id  # 记录item_id对应的embedding在all_item_embeddings中的索引
-                idx += 1
+        if self.current_epoch % 5 == 0:
+            all_item_embeddings = []
+            self.idx_item_emb_dic = {}
+            idx = 0
+            for batch in tqdm(self.movies_dataloader, desc="Building Item Embeddings", ncols=100):
+                for key in batch:
+                    if isinstance(batch[key], torch.Tensor):
+                        batch[key] = batch[key].to(self.device)
+                item_vector = self.get_item_embedding(batch)  # 获取物品特征向量
+                item_emb = self.item_fc(item_vector)  # 物品特征通过全连接层  bx16
+                item_emb = F.normalize(item_emb, p=2, dim=1)
+                item_emb = item_emb.cpu().numpy()
+                all_item_embeddings.append(item_emb)
+                for i, item_id in enumerate(batch[2].cpu().numpy()): # 2是item id的slot_id
+                    self.idx_item_emb_dic[idx] = item_id  # 记录item_id对应的embedding在all_item_embeddings中的索引
+                    idx += 1
 
-        self.all_item_embeddings = np.concatenate(all_item_embeddings, axis=0)
-        self.index = faiss.IndexFlatIP(self.all_item_embeddings.shape[1])  # 内积相似度
-        self.index.add(self.all_item_embeddings)  # 添加所有物品向量到索引
+            self.all_item_embeddings = np.concatenate(all_item_embeddings, axis=0)
+            self.index = faiss.IndexFlatIP(self.all_item_embeddings.shape[1])  # 内积相似度
+            self.index.add(self.all_item_embeddings)  # 添加所有物品向量到索引
 
-        # 计算验证集的命中率
-        self.hit_rate(k=50)
+            # 计算验证集的命中率
+            self.hit_rate(k=50)

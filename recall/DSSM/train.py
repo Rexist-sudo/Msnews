@@ -1,9 +1,10 @@
-from DSSM_model import DSSM
+import sys
+sys.path.append('/data2/zhy/Movie_Recsys')
+
+from recall.DSSM.model import DSSM
 from torch.utils.data import DataLoader
 import torch
 import lightning as L
-import sys
-sys.path.append('/data2/zhy/Movie_Recsys')
 from DataReader.data_reader import DataReader
 
 
@@ -26,9 +27,9 @@ if __name__ == "__main__":
     
     
     # 创建DataLoader
-    train_dataloader = DataLoader(train_dataset, batch_size=512, shuffle=True, num_workers=4)
-    val_dataloader = DataLoader(val_dataset, batch_size=256, shuffle=False, num_workers=4, drop_last=False)
-    movies_dataloader = DataLoader(movies_dataset, batch_size=16, shuffle=False, num_workers=4, drop_last=False)
+    train_dataloader = DataLoader(train_dataset, batch_size=1024, shuffle=True, num_workers=4)
+    val_dataloader = DataLoader(val_dataset, batch_size=512, shuffle=False, num_workers=4, drop_last=False)
+    movies_dataloader = DataLoader(movies_dataset, batch_size=256, shuffle=False, num_workers=4, drop_last=False)
     
     # 初始化DSSM模型
     model = DSSM(config_path, {'movies_dataloader': movies_dataloader, 'val_dataloader': val_dataloader})
@@ -44,9 +45,9 @@ if __name__ == "__main__":
     
     # 初始化Trainer
     trainer = L.Trainer(
-        max_epochs=10,  # 最大训练轮数
+        max_epochs=400,  # 最大训练轮数
         accelerator="gpu", # 使用GPU加速
-        devices=[0], # 使用1块GPU
+        devices=[2], # 使用1块GPU
         callbacks=[checkpoint_callback]  # 添加检查点回调
     )
 
