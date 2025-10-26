@@ -6,12 +6,21 @@ from torch.utils.data import DataLoader
 import torch
 import lightning as L
 from DataReader.data_reader import DataReader
+import argparse
 
-
+def parse_args():
+    parser = argparse.ArgumentParser(description="DSSM Training")
+    parser.add_argument("--config", "-c", type=str, default="/data2/zhy/Movie_Recsys/feature.json", help="Path to config file")
+    parser.add_argument("--lr", type=float, default=3e-3, help="Learning rate")
+    parser.add_argument("--min_lr", type=float, default=1e-3, help="Minimum learning rate")
+    parser.add_argument("--lr_milestones", type=int, nargs='+', default=[1000, 6000], help="Learning rate decay milestones")
+    return parser.parse_args()
 
 if __name__ == "__main__":
+    args = parse_args()
+
     # 配置文件路径
-    config_path = '/data2/zhy/Movie_Recsys/feature.json'
+    config_path = args.config
     # 训练数据路径
     train_feature_path = '/data2/zhy/Movie_Recsys/FeatureFiles/train_ratings_features.txt'
     # 验证数据路径
@@ -32,8 +41,13 @@ if __name__ == "__main__":
     movies_dataloader = DataLoader(movies_dataset, batch_size=256, shuffle=False, num_workers=4, drop_last=False)
     
     # 初始化DSSM模型
-    model = DSSM(config_path, {'movies_dataloader': movies_dataloader, 'val_dataloader': val_dataloader})
-    
+    hparams = {
+        'lr': args.lr,
+        'min_lr': args.min_lr,
+        'lr_milestones': args.lr_milestones
+    }
+    model = DSSM(config_path, {'movies_dataloader': movies_dataloader, 'val_dataloader': val_dataloader}, hparams)
+
     # 定义检查点回调，只保存模型，不做验证
     checkpoint_callback = L.pytorch.callbacks.ModelCheckpoint(
         save_top_k=-1,  # 保存所有epoch的模型
@@ -45,7 +59,7 @@ if __name__ == "__main__":
     
     # 初始化Trainer
     trainer = L.Trainer(
-        max_epochs=400,  # 最大训练轮数
+        max_epochs=10,  # 最大训练轮数
         accelerator="gpu", # 使用GPU加速
         devices=[2], # 使用1块GPU
         callbacks=[checkpoint_callback]  # 添加检查点回调
