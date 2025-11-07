@@ -1,6 +1,6 @@
 
 ratings = {}
-with open('./ratings.dat', 'r') as f:
+with open('../ratings.dat', 'r') as f:
     for line in f:
         line = line.strip()
         user, item, score, timestamp = line.split('::')
@@ -22,11 +22,11 @@ for user in ratings:
     ratings[user] = ratings[user][:last_pos_idx]
 
 
-with open('train_ratings.dat', 'w') as f:
+with open('../train_ratings.dat', 'w') as f:
     for user in ratings:
         for data in ratings[user]:
             f.write('::'.join(data) + '\n')
 
-with open('test_ratings.dat', 'w') as f:
+with open('../test_ratings.dat', 'w') as f:
     for data in vals:
         f.write('::'.join(data) + '\n')
