@@ -8,6 +8,8 @@ import lightning as L
 from DataReader.data_reader import DataReader
 import argparse
 
+L.seed_everything(42, workers=True)
+
 def parse_args():
     parser = argparse.ArgumentParser(description="Deep Training")
     parser.add_argument("--config", "-c", type=str, default="/data2/zhy/Movie_Recsys/feature_sort.json", help="Path to config file")
@@ -41,12 +43,12 @@ if __name__ == "__main__":
     movies_dataloader = DataLoader(movies_dataset, batch_size=1024, shuffle=False, num_workers=4, drop_last=False)
     
     # 初始化DSSM模型
-    hparams = {
-        'lr': args.lr,
-        'min_lr': args.min_lr,
-        'lr_milestones': args.lr_milestones
-    }
-    model = Deep(config_path, {'movies_dataloader': movies_dataloader, 'val_dataloader': val_dataloader}, hparams)
+    # hparams = {
+    #     'lr': args.lr,
+    #     'min_lr': args.min_lr,
+    #     'lr_milestones': args.lr_milestones
+    # }
+    model = Deep(config_path, {'movies_dataloader': movies_dataloader, 'val_dataloader': val_dataloader}, hparams=vars(args))
 
     # 定义检查点回调，只保存模型，不做验证
     checkpoint_callback = L.pytorch.callbacks.ModelCheckpoint(
