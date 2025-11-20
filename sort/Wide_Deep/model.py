@@ -59,7 +59,7 @@ class WideDeep(BaseModel):
 
     def forward(self, x):
         wide_x, deep_x = self.get_inp_embedding(x)  # 获取输入特征向量
-        return self.score_fc(wide_x, deep_x), wide_x  # 返回预测分数
+        return self.score_fc(wide_x, deep_x)  # 返回预测分数
 
     
     def get_inp_embedding(self, batch):
@@ -81,9 +81,9 @@ class WideDeep(BaseModel):
         return wide_x, deep_x
     
     def training_step(self, batch, batch_idx):
-        scores, wide_x = self.forward(batch)
+        scores = self.forward(batch)
         labels = batch['label'][:, 1]  # 获取是否喜欢的标签
-        loss = self.bceLoss(scores, labels)# + 1e-6 * torch.mean(torch.abs(wide_x))  # 计算二元交叉熵损失
+        loss = self.bceLoss(scores, labels)  # 计算二元交叉熵损失
         self.log('train_loss', loss, prog_bar=True)
         return loss
     

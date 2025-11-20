@@ -3,7 +3,7 @@
     "/data2/zhy/Movie_Recsys/MovieLens_1M_data/train_ratings.dat",
     "/data2/zhy/Movie_Recsys/MovieLens_1M_data/test_ratings.dat"
   ],
-  "test_ratings_path": "/data2/zhy/Movie_Recsys/MovieLens_1M_data/test_ratings.dat",
+  // "test_ratings_path": "/data2/zhy/Movie_Recsys/MovieLens_1M_data/test_ratings.dat",
   "movies_path": "/data2/zhy/Movie_Recsys/MovieLens_1M_data/movies.dat",
   "users_path": "/data2/zhy/Movie_Recsys/MovieLens_1M_data/users.dat",
   "feature_extractor_path": "/data2/zhy/Movie_Recsys/FeaturesGenerator/feature_extractor.py",
