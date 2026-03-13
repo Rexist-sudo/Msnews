@@ -13,7 +13,14 @@ features:
 
   dense_feature_names: []
 
-  array_feature_names: []
+  array_feature_names:
+    - user_history
+    - user_history_clicked_category
+    - user_history_clicked_subcategory
+    # - user_history_abstract_entity_type
+    # - user_history_title_entity_type
+    # - item_title_entity_type
+    # - item_abstract_entity_type
 
   item_feature_names:
     - item_id
@@ -23,16 +30,26 @@ features:
   user_feature_names:
     - user_id
     - user_click_category
+    - user_history
+    - user_history_clicked_category
+    - user_history_clicked_subcategory
 
-  array_max_length: {}
+  array_max_length:
+    user_history: 150
+    user_history_clicked_category: 150
+    user_history_clicked_subcategory: 150
+    # user_history_abstract_entity_type: 200
+    # user_history_title_entity_type: 200
+    # item_title_entity_type: 10
+    # item_abstract_entity_type: 10
 
 embeddings:
   embedding_table_size:
     user_id: 94058
     item_id: 65239
-    category: 19
-    subcategory: 270
-    user_click_category: 18
+    category: 20
+    subcategory: 271
+    user_click_category: 20
 
   embedding_tables:
     base_embedding_table:
@@ -42,18 +59,25 @@ embeddings:
         category: 16
         subcategory: 16
         user_click_category: 16
-      share_emb_table_features: {}
+      share_emb_table_features:
+        user_history: item_id
+        # user_click_category: category
+        user_history_clicked_category: category
+        user_history_clicked_subcategory: subcategory
+        # item_abstract_entity_id: 100
+        # item_title_entity_id: 100
+        # user_history_title_entity_id: item_title_entity_id
 
 dataset:
   batch_size: 512
   num_workers: 4
   pin_memory: true
-  only_test_warm_up_user: true
+  only_test_warm_up_user: false
 
 
 train_hparams:
   val_freq: 0.5
-  max_epoch: 20
+  max_epoch: 40
   lr: 1.0e-3
   min_lr: 5.0e-6
   lr_milestones:
