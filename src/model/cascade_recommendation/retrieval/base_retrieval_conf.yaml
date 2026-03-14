@@ -97,7 +97,7 @@ embeddings:
 
 dataset:
   batch_size: 1024
-  num_workers: 4
+  num_workers: 8
   pin_memory: true
   only_test_warm_up_user: true
 
