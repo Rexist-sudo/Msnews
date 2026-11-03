@@ -38,5 +38,7 @@ test.ipynb
 pretrain_embedding
 *.txt
 
+/docs
+
 codex-skills
 .codex
