@@ -21,27 +21,24 @@ mode ?= normal
 fe:
 	python -m src.dataset.FeaturesGenerator.feature_extractor -c src/dataset/FeaturesGenerator/config_fg.yaml --mode $(mode)
 
+# 根据特征 ID 映射生成标题实体 embedding（先完成 preprocess 和 fe）
+.PHONY: pretrain_embedding
+pretrain_embedding:
+	python -m src.scripts.pretrain_embedding_table --vec_file src/tmp/preprocess/entity_embedding_all.vec --map_file src/tmp/extractored_feature/original_val_2_embedding_idx_dict.json --output_path pretrain_embedding/title_entity_embedding.ckpt --feature_name item_title_entity_id --emb_dim 100
+
 # 将提取后的 txt 特征转为 npz（独立步骤）
 .PHONY: fe_npz
 fe_npz:
-	python -m src.dataset.FeaturesGenerator.txt2npz_converter -c src/dataset/FeaturesGenerator/config_fg.yaml --feature_dir src/tmp/extractored_feature
+	python -m src.dataset.FeaturesGenerator.txt2npz_converter -c src/dataset/FeaturesGenerator/config_fg.yaml --feature_dir src/tmp/extractored_feature --max_rows_per_part 40000
 
 # 训练排序模型，指令示例: make train model=deep
 .PHONY: train
 stage ?= sort
 model_group ?= classic_sort_models
 train:
-	@if [ -z "$(model)" ]; then \
-		echo "Usage: make train model=<model_name> [stage=sort] [model_group=classic_sort_models]"; \
-		exit 1; \
-	elif [ "$(stage)" != "sort" ]; then \
-		echo "当前目录结构仅支持 stage=sort，收到 stage=$(stage)"; \
-		exit 1; \
-	else \
-		python -m src.model.sort_models.$(model_group).$(model).train \
-			-c src/model/sort_models/$(model_group)/base_sort_conf.yaml \
-			-e src/model/sort_models/$(model_group)/$(model)/$(model)_conf.yaml; \
-	fi
+	$(if $(strip $(model)),,$(error Usage: make train model=MODEL [stage=sort] [model_group=classic_sort_models]))
+	$(if $(filter sort,$(stage)),,$(error Only stage=sort is supported))
+	python -m src.model.sort_models.$(model_group).$(model).train -c src/model/sort_models/$(model_group)/base_sort_conf.yaml -e src/model/sort_models/$(model_group)/$(model)/$(model)_conf.yaml
 
 # 分析日志，指令示例: make log model=deep
 .PHONY: log

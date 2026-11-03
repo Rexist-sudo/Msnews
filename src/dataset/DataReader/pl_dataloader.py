@@ -109,7 +109,7 @@ class MINDDataModule(pl.LightningDataModule):
 
     def train_dataloader(self):
         return DataLoader(
-            self.train_dataset,
+            self.train_dataset, # type: ignore
             batch_size=self.batch_size,
             shuffle=True,
             num_workers=self.num_workers,
@@ -120,7 +120,7 @@ class MINDDataModule(pl.LightningDataModule):
 
     def val_dataloader(self):
         validation_dataloader = DataLoader(
-            self.val_dataset,
+            self.val_dataset, # type: ignore
             batch_size=1024,
             shuffle=False,
             num_workers=self.num_workers,

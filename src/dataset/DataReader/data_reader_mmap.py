@@ -1,4 +1,5 @@
 import json
+import os
 from pathlib import Path
 from typing import Dict, Optional, Union
 
@@ -36,13 +37,47 @@ class DataReaderMmap(Dataset):
         self.part_info = self._resolve_single_part(self.manifest, self.data_path)
         self.part_dir = self.data_path / self.part_info["path"]
         self.total_rows = int(self.part_info["rows"])
-        self.arrays = self._load_single_part_arrays(self.part_dir)
+        # Windows spawn 会 pickle Dataset；不要把 mmap 数组内容传给 worker。
+        # 每个进程首次取样时独立打开文件，之后复用该进程内的映射。
+        self.arrays = None
+        self._arrays_pid = None
+        if not (self.part_dir / "label.npy").exists():
+            raise FileNotFoundError(f"label.npy missing in part directory: {self.part_dir}")
 
         self.selected_indices: Optional[np.ndarray] = None
         if train_user_id_set is not None:
             self.filter_data_by_user_id(train_user_id_set)
         if filter_negative:
             self.filter_negative_data()
+
+    def __getstate__(self):
+        state = self.__dict__.copy()
+        state["arrays"] = None
+        state["_arrays_pid"] = None
+        return state
+
+    def __setstate__(self, state):
+        self.__dict__.update(state)
+        self.arrays = None
+        self._arrays_pid = None
+
+    def close(self):
+        """释放本进程的映射；返回给调用方的 Tensor 已复制，不依赖映射。"""
+        arrays = self.arrays
+        self.arrays = None
+        self._arrays_pid = None
+        if arrays is not None:
+            for array in arrays.values():
+                if isinstance(array, np.memmap):
+                    array._mmap.close()
+
+    def _ensure_arrays(self):
+        pid = os.getpid()
+        if self.arrays is None or self._arrays_pid != pid:
+            self.close()
+            self.arrays = self._load_single_part_arrays(self.part_dir)
+            self._arrays_pid = pid
+        return self.arrays
 
     def _load_manifest(self, split_dir: Path) -> Dict:
         manifest_path = split_dir / "manifest.json"
@@ -113,7 +148,7 @@ class DataReaderMmap(Dataset):
             raise IndexError(f"Index out of range: {idx}")
 
         local_idx = int(self.selected_indices[idx]) if self.selected_indices is not None else idx
-        arrs = self.arrays
+        arrs = self._ensure_arrays()
 
         ret_datas: Dict[str, Union[torch.Tensor, int, float]] = {}
 

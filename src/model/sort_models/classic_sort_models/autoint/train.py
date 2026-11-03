@@ -48,7 +48,7 @@ if __name__ == "__main__":
 
     model = AutoInt(config)
 
-    name = model.config.get("name", "default_experiment")
+    name = model.config.get("name", "default_experiment") # type: ignore
     max_epochs = model.train_hparams.get("max_epoch", 10)
     val_freq = model.train_hparams.get("val_freq", 1)
     devices = model.train_hparams.get("gpus", [0])

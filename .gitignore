@@ -39,3 +39,4 @@ pretrain_embedding
 *.txt
 
 codex-skills
+.codex

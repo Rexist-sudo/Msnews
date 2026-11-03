@@ -201,7 +201,32 @@ src/tmp/extractored_feature/
 └── dataset_extract_info.yaml
 ```
 
-### 7. 将 TXT 特征转换为 MMAP 格式
+### 7. 生成标题实体 Embedding 权重
+
+完成预处理和特征提取后，将 MIND 提供的实体向量按本次特征 ID 映射整理为模型可加载的权重：
+
+```bash
+make pretrain_embedding
+```
+
+输入文件：
+
+- `src/tmp/preprocess/entity_embedding_all.vec`
+- `src/tmp/extractored_feature/original_val_2_embedding_idx_dict.json`
+
+默认产物：
+
+```text
+pretrain_embedding/title_entity_embedding.ckpt
+```
+
+该路径与 `base_sort_conf.yaml` 中的 `pretrain_embedding.item_title_entity_id` 对应。上述命令从项目根目录执行；重新生成特征 ID 映射后，也应重新生成此权重，确保矩阵行号与实体索引一致。
+
+这一步只转换已有向量，不额外训练模型。标题实体是标题中出现的人物、地点、组织等实体，使用向量可为模型提供新闻内容信息；它不是整段标题的文本 embedding。生成的 `.ckpt` 保存的是二维权重 Tensor，模型加载后将该表冻结，用户历史标题实体可共享这张表。
+
+注意：当前基础配置虽然注释了标题实体输入特征，但仍在 `embedding_dims` 中声明并加载该表，因此缺少权重依然会阻塞模型初始化。生成文件并不自动启用实体输入特征；是否参与预测还取决于模型的特征配置。`make fe` 和 `make fe_npz` 都不会代替本步骤。
+
+### 8. 将 TXT 特征转换为 MMAP 格式
 
 如果你希望使用更高效的 `mmap` 训练链路，再执行：
 
@@ -211,7 +236,7 @@ make fe_npz
 
 虽然命令名仍然叫 `fe_npz`，但当前实现实际生成的是分片 `mmap` 目录，而不是单文件 `.npz`。
 
-### 8. 训练模型
+### 9. 训练模型
 
 例如训练 `deep` 排序模型：
 
@@ -228,6 +253,7 @@ make train model=deep
 ```bash
 make preprocess
 make fe
+make pretrain_embedding
 make fe_npz
 make train model=deep
 ```
@@ -239,7 +265,7 @@ dataset:
   load_npz: false
 ```
 
-然后直接执行：
+完成预处理、特征提取和标题实体权重生成后，可以跳过 `make fe_npz`，直接执行：
 
 ```bash
 make train model=deep
@@ -428,6 +454,7 @@ src/model/sort_models/classic_sort_models/
 | `make preprocess` | 预处理原始 MIND 数据 |
 | `make fe` | 抽取训练/验证/物品特征 |
 | `make fe mode=debug` | 调试模式抽特征，仅处理有限样本 |
+| `make pretrain_embedding` | 按特征 ID 映射生成标题实体 embedding 权重，需先完成预处理和特征提取 |
 | `make fe_npz` | 将 txt 特征转换成 mmap 目录 |
 | `make train model=deep` | 训练排序模型 |
 | `make train model=deep model_group=classic_sort_models` | 显式指定模型组训练 |

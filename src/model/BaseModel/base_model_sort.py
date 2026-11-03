@@ -191,7 +191,7 @@ class BaseModelSort(BaseModel):
             for task in tqdm(tasks, desc="Calculating validation metrics (Serial)", ncols=80):
                 results.append(_compute_wrapper(task))
         else:
-            num_workers = max(1, min(multiprocessing.cpu_count(), 28))
+            num_workers = max(1, min(multiprocessing.cpu_count(), 4))
             with ProcessPoolExecutor(max_workers=num_workers) as executor:
                 chunksize = max(1, len(tasks) // (num_workers * 4))
                 results = list(tqdm(executor.map(_compute_wrapper, tasks, chunksize=chunksize), 

@@ -229,62 +229,52 @@ def merge_parts_into_single_part(
         shutil.rmtree(merged_dir_tmp)
     merged_dir_tmp.mkdir(parents=True, exist_ok=True)
 
-    # 1) 先创建目标 memmap（单个大 part）
-    merged_arrays: Dict[str, np.memmap] = {}
+    # Process one field at a time; release every mapping before filesystem cleanup.
+    fields = []
     for fea in feature_names:
-        first_part_dir = Path(parts_sorted[0]["part_dir"])
-        first_arr = np.load(first_part_dir / f"{fea}.npy", mmap_mode="r")
-        if first_arr.ndim == 1:
-            shape = (total_rows,)
-        else:
-            shape = (total_rows, first_arr.shape[1])
-        merged_arrays[fea] = np.lib.format.open_memmap(
-            merged_dir_tmp / f"{fea}.npy",
-            mode="w+",
-            dtype=first_arr.dtype,
-            shape=shape,
-        )
+        fields.append(fea)
         if fea in array_feature_names:
-            first_mask = np.load(first_part_dir / f"{fea}_mask.npy", mmap_mode="r")
-            merged_arrays[f"{fea}_mask"] = np.lib.format.open_memmap(
-                merged_dir_tmp / f"{fea}_mask.npy",
-                mode="w+",
-                dtype=first_mask.dtype,
-                shape=(total_rows, first_mask.shape[1]),
-            )
-
-    first_label = np.load(Path(parts_sorted[0]["part_dir"]) / "label.npy", mmap_mode="r")
-    merged_arrays["label"] = np.lib.format.open_memmap(
-        merged_dir_tmp / "label.npy",
-        mode="w+",
-        dtype=first_label.dtype,
-        shape=(total_rows, first_label.shape[1] if first_label.ndim > 1 else label_dim),
-    )
-
-    # 2) 按 part 序号顺序拷贝到目标大数组
+            fields.append(f"{fea}_mask")
+    fields.append("label")
+    total_bad = sum(int(p.get("bad_lines", 0)) for p in parts_sorted)
     cursor = 0
-    total_bad = 0
-    for p in parts_sorted:
-        part_dir = Path(p["part_dir"])
-        rows = int(p["rows"])
-        total_bad += int(p.get("bad_lines", 0))
-        end = cursor + rows
 
-        for fea in feature_names:
-            arr = np.load(part_dir / f"{fea}.npy", mmap_mode="r")
-            merged_arrays[fea][cursor:end] = arr
-            if fea in array_feature_names:
-                mask = np.load(part_dir / f"{fea}_mask.npy", mmap_mode="r")
-                merged_arrays[f"{fea}_mask"][cursor:end, :] = mask
+    for field in fields:
+        source = np.load(Path(parts_sorted[0]["part_dir"]) / f"{field}.npy", mmap_mode="r")
+        try:
+            dtype = source.dtype
+            trailing_shape = source.shape[1:]
+            if field == "label" and source.ndim == 1:
+                trailing_shape = (label_dim,)
+        finally:
+            source._mmap.close()
 
-        label_arr = np.load(part_dir / "label.npy", mmap_mode="r")
-        if label_arr.ndim == 1:
-            merged_arrays["label"][cursor:end, 0] = label_arr
-        else:
-            merged_arrays["label"][cursor:end, :] = label_arr
-
-        logger.info(f"合并 part={p['part_idx']} -> 全量区间[{cursor}, {end})")
-        cursor = end
+        target = np.lib.format.open_memmap(
+            merged_dir_tmp / f"{field}.npy", mode="w+",
+            dtype=dtype, shape=(total_rows, *trailing_shape),
+        )
+        try:
+            cursor = 0
+            for part in parts_sorted:
+                rows = int(part["rows"])
+                end = cursor + rows
+                source = np.load(Path(part["part_dir"]) / f"{field}.npy", mmap_mode="r")
+                try:
+                    if source.shape[0] != rows or end > total_rows:
+                        raise ValueError(f"Row count mismatch: {part['part_dir']}/{field}.npy")
+                    if field == "label" and source.ndim == 1:
+                        target[cursor:end, 0] = source
+                    else:
+                        target[cursor:end] = source
+                finally:
+                    source._mmap.close()
+                cursor = end
+            if cursor != total_rows:
+                raise ValueError(f"Merged rows={cursor}, expected {total_rows}")
+            target.flush()
+        finally:
+            target._mmap.close()
+        logger.info(f"Merged field={field}, rows={cursor}")
 
     # 3) 清理旧 part 目录，仅保留 part_000001
     for p in parts_sorted:
@@ -332,7 +322,7 @@ def convert_one_file_to_mmap(
     feature_names: List[str],
     array_feature_names: List[str],
     array_max_length: Dict[str, int],
-    max_rows_per_part: int = 1000000,
+    max_rows_per_part: int = 40000,
 ):
     """
     将一个 txt 文件转换为 mmap 友好的分片列式数据目录。
@@ -355,11 +345,10 @@ def convert_one_file_to_mmap(
         shutil.rmtree(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    # 只启用最多4路并行；CPU不足时自动降级。
-    total_cpu = os.cpu_count() or 1
-    worker_count = 1 if total_cpu < 2 else min(4, int(total_cpu))
+    # 使用四个转换进程，配合小分块限制并发内存占用。
+    worker_count = 4
     logger.info(f"步骤 3/5：开始分片转换，worker_count={worker_count}, max_rows_per_part={max_rows_per_part}")
-    logger.info("分配规则：按 part 序号取模，CPU1->1,5,9... CPU2->2,6,10... 依此类推")
+    logger.info("分片按序号轮流分配给转换进程，完成后按原顺序合并为单个 part")
 
     parts_meta: List[Dict] = []
     total_bad_lines = 0
@@ -397,7 +386,7 @@ def convert_one_file_to_mmap(
                 logger.info(f"尾部分片完成：part={part_idx}, rows={result['rows']}, bad={result['bad_lines']}")
                 pbar.update(len(chunk_lines))
     else:
-        # 多进程路径：最多4路，并按 part 序号取模路由到固定 worker
+        # 多进程路径：按 part 序号取模路由到固定 worker
         pending_by_worker = {wid: [] for wid in range(worker_count)}
         executors = [ProcessPoolExecutor(max_workers=1) for _ in range(worker_count)]
         try:
@@ -508,7 +497,7 @@ def main():
     parser.add_argument(
         "--max_rows_per_part",
         type=int,
-        default=1000000,
+        default=40000,
         help="Maximum rows per shard part.",
     )
     args = parser.parse_args()

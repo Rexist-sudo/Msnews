@@ -78,8 +78,8 @@ embeddings:
         # item_title_entity_id: 100
         user_history_title_entity_id: item_title_entity_id
       pretrain_embedding:
-        # item_abstract_entity_id: "/data2/zhy/News_Recsys/pretrain_embedding/abstract_entity_embedding.ckpt"
-        item_title_entity_id: "/data2/zhy/News_Recsys/pretrain_embedding/title_entity_embedding.ckpt"
+        # item_abstract_entity_id: "./pretrain_embedding/abstract_entity_embedding.ckpt"
+        item_title_entity_id: "./pretrain_embedding/title_entity_embedding.ckpt"
 
 dataset:
   batch_size: 512
@@ -91,7 +91,7 @@ dataset:
 
 train_hparams:
   val_freq: 0.5
-  max_epoch: 40
+  max_epoch: 5
   lr: 1.0e-3
   min_lr: 5.0e-6
   lr_milestones:
