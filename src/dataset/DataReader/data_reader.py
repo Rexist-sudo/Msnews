@@ -74,7 +74,7 @@ class DataReader(Dataset):
             feature_name, val_str = item.split(':', 1)
 
             # 1. 处理稀疏特征 (Sparse / ID)
-            if feature_name in self.sparse_features:
+            if feature_name in self.sparse_features or feature_name == 'impression_id':
                 ret_datas[feature_name] = int(val_str)
 
             # 2. 处理稠密特征 (Dense / Float)

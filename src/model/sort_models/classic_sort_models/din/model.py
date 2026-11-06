@@ -154,17 +154,14 @@ class DIN(BaseModelSort):
         if feature_name not in batch:
             raise ValueError(f"batch 中缺少特征: '{feature_name}'")
 
-        val = batch[feature_name]
         mask = None
 
         if feature_name in self.array_feature_names:
             mask = batch.get(f"{feature_name}_mask", None)
             if mask is None:
                 raise ValueError(f"序列特征 '{feature_name}' 缺少对应 mask: '{feature_name}_mask'")
-            # padding 值 -1 映射到 embedding 的 padding_idx=0
-            val = torch.clamp(val, min=0)
 
-        emb = self.get_feature_embedding("base_embedding_table", feature_name, val)
+        emb = self.get_batch_feature_embedding("base_embedding_table", feature_name, batch)
         if feature_name in self.array_feature_names:
             emb = self.array_feature_pooling(emb, mask)
 
@@ -287,7 +284,7 @@ class DIN(BaseModelSort):
     def training_step(self, batch, batch_idx):
         """训练单步：计算 loss，并在可计算时记录 batch AUC。"""
         scores = self.forward(batch)
-        labels = batch["label"][:, 0]
+        labels = batch["label"].reshape(-1)
         loss = self.bceLoss(scores, labels)
 
         self.log("train_loss", loss, prog_bar=True, on_epoch=True, on_step=False)
@@ -303,7 +300,8 @@ class DIN(BaseModelSort):
 
     def configure_optimizers(self):
         """优化器和学习率调度，保持与项目其他排序模型一致。"""
-        optimizer = torch.optim.AdamW(self.parameters(), lr=self.train_hparams.lr, betas=(0.9, 0.999))
+        optimizer = torch.optim.AdamW(self.parameters(), lr=self.train_hparams.lr, betas=(0.9, 0.999),
+                                      weight_decay=float(self.train_hparams.get("weight_decay", 0.01)))
         lr_scheduler = CosinDecayLR(
             optimizer,
             lrs=[self.train_hparams.lr, self.train_hparams.min_lr],

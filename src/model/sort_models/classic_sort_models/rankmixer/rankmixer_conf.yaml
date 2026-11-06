@@ -1,0 +1,11 @@
+name: rankmixer
+
+rankmixer_cfg:
+  # 主方案：8 个字段，D=128、L=2、k=2。
+  token_count: 8
+  dim: 128
+  layers: 2
+  expansion: 2
+  interaction: rankmixer
+  mixing: true
+  shared_ffn: false

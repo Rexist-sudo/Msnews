@@ -1,0 +1,8 @@
+name: m3_static
+
+statistics_cfg:
+  mode: smooth
+  state_dim: 8
+
+reread_cfg:
+  query_source: static

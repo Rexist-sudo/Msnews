@@ -1,0 +1,5 @@
+name: m2_smooth
+
+statistics_cfg:
+  mode: smooth
+  state_dim: 8

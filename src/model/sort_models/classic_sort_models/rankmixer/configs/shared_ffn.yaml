@@ -1,0 +1,4 @@
+name: rankmixer_shared_ffn
+rankmixer_cfg:
+  dim: 64
+  shared_ffn: true

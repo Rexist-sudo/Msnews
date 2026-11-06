@@ -293,7 +293,7 @@ class BaseModel(L.LightningModule):
             plt.legend()
             plt.grid(True)
             
-            save_path = os.path.join(loss_fig_dir, f"loss_curve_epoch_{self.current_epoch}_step_{self.global_step}.png")
+            save_path = os.path.join(loss_fig_dir, "loss_curve.png")
             plt.savefig(save_path)
             plt.close() # Release memory
             logger.info(f"Loss curve saved to {save_path}")
@@ -329,6 +329,13 @@ class BaseModel(L.LightningModule):
              raise ValueError(f"Embedding table not found for {feature_name} (mapped to {emb_fname})")
         
         return self.embedding_tables[embedding_tables_name][emb_fname](feature_value.long())
+
+    def get_batch_feature_embedding(self, embedding_tables_name, feature_name, batch):
+        """读取单个字段，供候选 query 与序列编码共用。"""
+        value = batch[feature_name]
+        if feature_name in self.array_feature_names:
+            value = torch.clamp(value, min=0)
+        return self.get_feature_embedding(embedding_tables_name, feature_name, value)
 
     def array_feature_pooling(
         self,
@@ -393,15 +400,12 @@ class BaseModel(L.LightningModule):
                 raise ValueError(f"Feature '{fname}' not found in batch.")
 
             mask = None
-            val = batch[fname]
             if fname in self.array_feature_names:
                 mask = batch.get(f"{fname}_mask", None)
                 if mask is None:
                     raise ValueError(f"Array feature '{fname}' requires '{fname}_mask' in batch.")
-                # DataReader pads array features with -1; map padding positions to 0 (embedding padding_idx).
-                val = torch.clamp(val, min=0)
 
-            emb = self.get_feature_embedding(embedding_tables_name, fname, val)
+            emb = self.get_batch_feature_embedding(embedding_tables_name, fname, batch)
             
             if fname in self.array_feature_names:
                 pooling_context = {
@@ -438,6 +442,8 @@ class BaseModel(L.LightningModule):
         logger.info(f"Model saved to {path}")
 
     def on_validation_start(self):
+        if getattr(self, "_checkpoint_managed_by_trainer", False):
+            return
         # 保存模型
         if not hasattr(self, 'ckpt_dir'):
             logger.warning("ckpt_dir not set. Skipping model save on validation start.")

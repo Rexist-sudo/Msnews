@@ -1,0 +1,4 @@
+name: rankmixer_no_mixing
+rankmixer_cfg:
+  dim: 64
+  mixing: false

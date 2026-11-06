@@ -1,0 +1,6 @@
+name: rankmixer_mlp
+rankmixer_cfg:
+  dim: 64
+  interaction: mlp
+  # 与 D=64 完整结构的交互和打分部分近参数量。
+  mlp_hidden_dims: [352, 252, 1]

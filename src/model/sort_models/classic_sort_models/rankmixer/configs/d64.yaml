@@ -1,0 +1,3 @@
+name: rankmixer_d64
+rankmixer_cfg:
+  dim: 64

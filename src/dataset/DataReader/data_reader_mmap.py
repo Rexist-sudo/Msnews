@@ -26,6 +26,7 @@ class DataReaderMmap(Dataset):
         self.dense_features = set(config.features.dense_feature_names)
         self.array_features = set(config.features.array_feature_names)
         self.array_max_length = config.features.array_max_length
+        self.statistics_mode = config.get("statistics_cfg", {}).get("mode")
 
         if feature_file_path is None:
             raise ValueError("Data file path must be provided.")
@@ -43,6 +44,14 @@ class DataReaderMmap(Dataset):
         self._arrays_pid = None
         if not (self.part_dir / "label.npy").exists():
             raise FileNotFoundError(f"label.npy missing in part directory: {self.part_dir}")
+        if self.statistics_mode is not None:
+            with (self.data_path.parent / "news_statistics.json").open(encoding="utf-8") as stream:
+                statistics = json.load(stream)
+            split = self.manifest["split"]
+            if statistics["splits"][split]["rows"] != self.total_rows:
+                raise ValueError("统计缓存与候选行数不一致，请重新生成 news_statistics")
+            if statistics["history_length"] != int(self.array_max_length["user_history"]):
+                raise ValueError("统计缓存与有效历史长度不一致")
 
         self.selected_indices: Optional[np.ndarray] = None
         if train_user_id_set is not None:
@@ -136,6 +145,16 @@ class DataReaderMmap(Dataset):
         if not label_fp.exists():
             raise FileNotFoundError(f"label.npy missing in part directory: {part_dir}")
         arrays["label"] = np.load(label_fp, mmap_mode="r")
+        # 请求 ID 仅用于评估分组，不作为模型特征。
+        impression_fp = part_dir / "impression_id.npy"
+        if impression_fp.exists():
+            arrays["impression_id"] = np.load(impression_fp, mmap_mode="r")
+        if self.statistics_mode is not None:
+            names = ["item_statistics", "history_statistics"]
+            if self.statistics_mode == "smooth":
+                names += ["item_state", "history_state"]
+            for name in names:
+                arrays[name] = np.load(self.data_path.parent / f"{self.manifest['split']}_{name}.npy", mmap_mode="r")
         return arrays
 
     def __len__(self) -> int:
@@ -143,50 +162,49 @@ class DataReaderMmap(Dataset):
             return self.total_rows
         return int(self.selected_indices.shape[0])
 
-    def __getitem__(self, idx: int) -> Dict[str, Union[torch.Tensor, int, float]]:
-        if idx < 0 or idx >= len(self):
-            raise IndexError(f"Index out of range: {idx}")
+    def __getitem__(self, idx):
+        return {name: value[0] for name, value in self.get_batch([idx]).items()}
 
-        local_idx = int(self.selected_indices[idx]) if self.selected_indices is not None else idx
-        arrs = self._ensure_arrays()
+    def __getitems__(self, indices):
+        batch = self.get_batch(indices)
+        return [{name: values[i] for name, values in batch.items()} for i in range(len(indices))]
 
-        ret_datas: Dict[str, Union[torch.Tensor, int, float]] = {}
-
-        for fea in self.sparse_features:
-            data = arrs.get(fea)
-            ret_datas[fea] = int(data[local_idx]) if data is not None else 0
-
-        for fea in self.dense_features:
-            data = arrs.get(fea)
-            ret_datas[fea] = float(data[local_idx]) if data is not None else 0.0
-
-        for fea in self.array_features:
-            max_len = self.array_max_length.get(fea)
-            if max_len is None:
-                raise ValueError(f"Max length for array feature '{fea}' missing in config.")
-
-            data = arrs.get(fea)
-            if data is None:
-                seq = np.full((int(max_len),), -1, dtype=np.int64)
-            else:
-                seq = np.asarray(data[local_idx], dtype=np.int64)
-            if seq.shape[0] != int(max_len):
-                raise ValueError(
-                    f"Array feature '{fea}' length mismatch: got {seq.shape[0]}, expected {int(max_len)}"
-                )
-
-            mask_data = arrs.get(f"{fea}_mask")
-            if mask_data is None:
-                mask = (seq != -1).astype(np.float32)
-            else:
-                mask = np.asarray(mask_data[local_idx], dtype=np.float32)
-
-            ret_datas[fea] = torch.tensor(seq, dtype=torch.long)
-            ret_datas[f"{fea}_mask"] = torch.tensor(mask, dtype=torch.float32)
-
-        label_row = np.asarray(arrs["label"][local_idx], dtype=np.float32)
-        ret_datas["label"] = torch.tensor(label_row, dtype=torch.float32)
-        return ret_datas
+    def get_batch(self, indices):
+        """批量读取同一套字段；训练 DataLoader 与 checkpoint 重放共用。"""
+        indices = np.asarray(indices, dtype=np.int64)
+        if indices.ndim != 1 or np.any(indices < 0) or np.any(indices >= len(self)):
+            raise IndexError("Batch indices out of range")
+        rows = self.selected_indices[indices] if self.selected_indices is not None else indices
+        arrays = self._ensure_arrays()
+        batch = {}
+        for name in self.sparse_features | self.dense_features | {"label", "impression_id"}:
+            values = arrays.get(name)
+            if values is None and name == "impression_id":
+                continue
+            dtype = np.float32 if name in self.dense_features or name == "label" else np.int64
+            values = np.zeros(len(rows), dtype=dtype) if values is None else np.array(values[rows], dtype=dtype)
+            batch[name] = torch.from_numpy(values)
+        for name in self.array_features:
+            length = int(self.array_max_length[name])
+            values = arrays.get(name)
+            sequence = (np.full((len(rows), length), -1, dtype=np.int64) if values is None
+                        else np.array(values[rows], dtype=np.int64))
+            if sequence.shape != (len(rows), length):
+                raise ValueError(f"Array feature '{name}' length mismatch: expected {length}")
+            masks = arrays.get(name + "_mask")
+            mask = (sequence != -1).astype(np.float32) if masks is None else np.array(masks[rows], dtype=np.float32)
+            batch[name] = torch.from_numpy(sequence)
+            batch[name + "_mask"] = torch.from_numpy(mask)
+        if self.statistics_mode is not None:
+            requests = arrays["impression_id"][rows].reshape(-1)
+            for prefix, index in (("item", rows), ("history", requests)):
+                values = np.array(arrays[prefix + "_statistics"][index], dtype=np.float32)
+                features = values[..., :4].copy()
+                if self.statistics_mode == "smooth":
+                    features[..., 1] = values[..., 4]
+                    batch[prefix + "_state"] = torch.from_numpy(np.array(arrays[prefix + "_state"][index], dtype=np.int64))
+                batch[prefix + "_statistics"] = torch.from_numpy(features)
+        return batch
 
     def _merge_selected(self, new_indices: np.ndarray):
         new_indices = np.asarray(new_indices, dtype=np.int64)

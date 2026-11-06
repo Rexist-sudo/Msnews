@@ -91,7 +91,7 @@ dataset:
 
 train_hparams:
   val_freq: 0.5
-  max_epoch: 5
+  max_epoch: 3
   lr: 1.0e-3
   min_lr: 5.0e-6
   lr_milestones:

@@ -1,10 +1,27 @@
 import os
+import numpy as np
 import lightning.pytorch as pl
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, Sampler
 from typing import Optional
 from .data_reader import DataReader
 from .data_reader_mmap import DataReaderMmap
 from ...Logger.logging import Logger
+
+
+class EpochRandomSampler(Sampler):
+    """沿用排序实验的逐轮打乱，使样本顺序独立于模型初始化。"""
+
+    def __init__(self, data, seed=42):
+        self.data, self.seed, self.epoch = data, seed, 0
+
+    def __len__(self):
+        return len(self.data)
+
+    def __iter__(self):
+        return iter(np.random.default_rng(self.seed + self.epoch).permutation(len(self.data)))
+
+    def set_epoch(self, epoch):
+        self.epoch = epoch
 
 
 class MINDDataModule(pl.LightningDataModule):
@@ -39,6 +56,8 @@ class MINDDataModule(pl.LightningDataModule):
         # - False: 走原有 txt 特征读取链路（DataReader）
         # - True : 走 mmap 分片读取链路（DataReaderMmap）
         self.load_npz = data_cfg.get('load_npz', False)
+        if self.conf.get("statistics_cfg", {}).get("mode") is not None and not self.load_npz:
+            raise ValueError("新闻统计特征使用 mmap 缓存，请设置 dataset.load_npz=true")
         
         # 4. 组装完整路径
         feature_dir = os.path.join(self.out_basedir, 'extractored_feature')
@@ -64,7 +83,7 @@ class MINDDataModule(pl.LightningDataModule):
         """
         在 fit/test 开始前运行，用于实例化 Dataset
         """
-        if stage == "fit" or stage is None:
+        if stage in ("fit", "validate", "test", "predict", None):
             # 检查文件是否存在
             if not os.path.exists(self.train_file_path):
                 raise FileNotFoundError(f"Training feature file missing: {self.train_file_path}")
@@ -101,22 +120,27 @@ class MINDDataModule(pl.LightningDataModule):
                     feature_file_path=self.val_file_path
                 )
 
-            self.logger.info("Loading News Data from: {}".format(self.news_file_path))
-            self.news_dataset = reader_cls(
-                config=self.conf,
-                feature_file_path=self.news_file_path,
-            )
+            if self.conf.train_stage == "retrieval":
+                self.logger.info("Loading News Data from: {}".format(self.news_file_path))
+                self.news_dataset = reader_cls(config=self.conf, feature_file_path=self.news_file_path)
 
     def train_dataloader(self):
         return DataLoader(
             self.train_dataset, # type: ignore
             batch_size=self.batch_size,
-            shuffle=True,
+            sampler=EpochRandomSampler(self.train_dataset, int(self.conf.train_hparams.get("seed", 42))),
             num_workers=self.num_workers,
             pin_memory=self.pin_memory,
             persistent_workers=True if self.num_workers > 0 else False,
             drop_last=False
         )
+
+    def teardown(self, stage=None):
+        # Windows 上显式释放 mmap；中断训练后也能重新生成或清理特征。
+        for name in ("train_dataset", "val_dataset", "news_dataset"):
+            dataset = getattr(self, name, None)
+            if hasattr(dataset, "close"):
+                dataset.close()
 
     def val_dataloader(self):
         validation_dataloader = DataLoader(
