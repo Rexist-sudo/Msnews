@@ -50,7 +50,7 @@ def benchmark(model, batch, repeats=100):
             "scope": "设备常驻输入的前向耗时，包含同步，不含数据读取"}
 
 
-def main(model_class):
+def main(model_class, analysis_function=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--checkpoint", required=True, type=Path)
     parser.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
@@ -81,8 +81,13 @@ def main(model_class):
             for name in arrays:
                 arrays[name][i] = int(row[name])
         rows = slice(None)
+    support = load_support(model.config)
     metrics = evaluate(arrays["user_id"][rows], arrays["item_id"][rows], arrays["label"][rows], scores,
-                       arrays["impression_id"][rows], support=load_support(model.config))
+                       arrays["impression_id"][rows], support=support)
+    if analysis_function is not None:
+        predictions = {name: arrays[name][rows].reshape(-1) for name in ("user_id", "item_id", "label", "impression_id")}
+        predictions["score"] = scores
+        metrics["analysis"] = analysis_function(model, data, predictions, support)
     data_module.teardown("validate")
     text = json.dumps(metrics, ensure_ascii=False, indent=2, allow_nan=False)
     if args.output:

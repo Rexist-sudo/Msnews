@@ -13,15 +13,43 @@ class EpochRandomSampler(Sampler):
 
     def __init__(self, data, seed=42):
         self.data, self.seed, self.epoch = data, seed, 0
+        self.resume_epoch, self.resume_offset = 0, 0
 
     def __len__(self):
         return len(self.data)
 
     def __iter__(self):
-        return iter(np.random.default_rng(self.seed + self.epoch).permutation(len(self.data)))
+        order = np.random.default_rng(self.seed + self.epoch).permutation(len(self.data))
+        offset = self.resume_offset if self.epoch == self.resume_epoch else 0
+        return iter(order[offset:])
 
     def set_epoch(self, epoch):
         self.epoch = epoch
+
+
+class ResumableDataLoader(DataLoader):
+    """保存已完成批次的游标，避免把 worker 预取的样本误算为已训练样本。
+
+    len 仍为完整一轮的 batch 数，配合 Lightning 恢复的 batch_progress；
+    迭代器仅返回本轮尚未完成的样本，新一轮自动恢复完整随机排列。
+    """
+
+    def __init__(self, *args, progress_provider, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.progress_provider = progress_provider
+
+    def state_dict(self) -> dict:
+        epoch, batches = self.progress_provider()
+        return {"epoch": epoch, "completed_batches": batches, "batch_size": self.batch_size,
+                "seed": self.sampler.seed, "rows": len(self.dataset)}
+
+    def load_state_dict(self, state: dict) -> None:
+        expected = {"batch_size": self.batch_size, "seed": self.sampler.seed, "rows": len(self.dataset)}
+        if any(state[name] != value for name, value in expected.items()):
+            raise ValueError(f"续训数据协议不一致: checkpoint={state}, current={expected}")
+        self.sampler.resume_epoch = int(state["epoch"])
+        self.sampler.resume_offset = min(int(state["completed_batches"]) * self.batch_size, len(self.dataset))
+        self.sampler.set_epoch(self.sampler.resume_epoch)
 
 
 class MINDDataModule(pl.LightningDataModule):
@@ -124,9 +152,14 @@ class MINDDataModule(pl.LightningDataModule):
                 self.logger.info("Loading News Data from: {}".format(self.news_file_path))
                 self.news_dataset = reader_cls(config=self.conf, feature_file_path=self.news_file_path)
 
+    def _train_progress(self):
+        loop = self.trainer.fit_loop.epoch_loop
+        return self.trainer.current_epoch, loop.batch_progress.current.completed
+
     def train_dataloader(self):
-        return DataLoader(
+        return ResumableDataLoader(
             self.train_dataset, # type: ignore
+            progress_provider=self._train_progress,
             batch_size=self.batch_size,
             sampler=EpochRandomSampler(self.train_dataset, int(self.conf.train_hparams.get("seed", 42))),
             num_workers=self.num_workers,

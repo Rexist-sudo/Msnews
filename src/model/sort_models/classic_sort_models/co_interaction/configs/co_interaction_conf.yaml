@@ -1,0 +1,31 @@
+name: co_interaction
+initial_parameters: experiments/ranking_study/m3/common_initialization.pt
+
+statistics_cfg:
+  mode: smooth
+  state_dim: 8
+
+co_interaction_cfg:
+  hidden_dim: 32
+
+analysis_cfg:
+  reference_predictions: experiments/ranking_study/m2_smooth_seed42/best_predictions.npz
+
+dataset:
+  batch_size: 512
+  num_workers: 4
+  pin_memory: true
+  load_npz: true
+  only_test_warm_up_user: false
+
+train_hparams:
+  seed: 42
+  max_epoch: 3
+  val_freq: 0.5
+  lr: 0.001
+  weight_decay: 0.01
+  min_lr: 5.0e-6
+  lr_milestones: [40000, 200000]
+  gradient_clip_val: 0.0
+  device: gpu
+  gpus: [0]

@@ -181,6 +181,15 @@ class DIN(BaseModelSort):
         Returns:
             pooled: [B, D]
         """
+        att_weight = self.din_attention_weights(embedding, mask, context)
+        return (embedding * att_weight.unsqueeze(-1)).sum(dim=1)
+
+    def din_attention_weights(self, embedding, mask=None, context=None):
+        """返回 [B, T] 的 DIN 权重；仅在有效历史上归一化，全 padding 返回零。
+
+        与聚合接口共用打分路径，供 M3 读取和机制分析使用，不增加参数。
+        context 的字段约定与 din_array_attention_pooling 相同。
+        """
         feature_name = context["feature_name"]
         query_embedding_map = context["query_embedding_map"]
         query_embedding = query_embedding_map[feature_name]
@@ -207,8 +216,7 @@ class DIN(BaseModelSort):
         else:
             att_weight = torch.softmax(att_logits, dim=1)
 
-        # [B, L, D] * [B, L, 1] -> [B, D]
-        return (embedding * att_weight.unsqueeze(-1)).sum(dim=1)
+        return att_weight
 
     def get_inp_embedding(self, batch):
         """

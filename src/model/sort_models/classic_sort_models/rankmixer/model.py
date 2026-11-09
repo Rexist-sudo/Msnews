@@ -2,7 +2,6 @@
 
 import torch
 from torch import nn
-from torch.nn import functional as F
 
 from ..din.model import DIN
 from ....model_utils.rankmixer import RankMixerBlock
@@ -47,18 +46,6 @@ class RankMixerDIN(DIN):
             # 候选与每条历史共用投影，保持新闻 ID 路及字段 token 的输入维度。
             self.statistics_projection = nn.Linear(news_dim + 4 + state_dim, news_dim)
 
-        self.reread_source = self.config.get("reread_cfg", {}).get("query_source")
-        if self.reread_source is not None:
-            if self.reread_source not in ("static", "feedback") or interaction != "rankmixer" or len(self.interaction) != 2:
-                raise ValueError("历史重读使用两层 RankMixer，query_source 为 static 或 feedback")
-            self.reread_indices = [self.field_names.index(name) for name in self.user_array_feature_names_din]
-            self.query_dims = [self._get_feature_embedding_dim(self.array_item_feature_pairs[name])
-                               for name in self.user_array_feature_names_din]
-            self.query_boost = nn.Linear(count * dim, sum(self.query_dims))
-            # 初始 query 增量为零，两组从相同的首次读取开始学习。
-            nn.init.zeros_(self.query_boost.weight)
-            nn.init.zeros_(self.query_boost.bias)
-
     def get_batch_feature_embedding(self, embedding_tables_name, feature_name, batch):
         embedding = super().get_batch_feature_embedding(embedding_tables_name, feature_name, batch)
         if self.statistics_mode is not None and feature_name in ("item_id", "user_history"):
@@ -74,19 +61,5 @@ class RankMixerDIN(DIN):
         tokens = torch.stack([projection(value) for projection, value in zip(self.field_projections, fields)], dim=1)
         if self.score_head is None:
             return torch.sigmoid(self.interaction(tokens.flatten(1)))
-        if self.reread_source is None:
-            tokens = self.interaction(tokens)
-        else:
-            hidden = self.interaction[0](tokens)
-            context = tokens if self.reread_source == "static" else hidden
-            query_deltas = self.query_boost(context.flatten(1)).split(self.query_dims, dim=1)
-            updates = torch.zeros_like(hidden)
-            for name, index, delta in zip(self.user_array_feature_names_din, self.reread_indices, query_deltas):
-                query = self._get_single_feature_embedding_from_batch(batch, self.array_item_feature_pairs[name])
-                history = self.get_batch_feature_embedding("base_embedding_table", name, batch)
-                reread = self.din_array_attention_pooling(history, batch[name + "_mask"],
-                            {"feature_name": name, "query_embedding_map": {name: query + delta}})
-                # 复用字段投影的线性部分，使 r1=r0 时回注严格为零。
-                updates[:, index] = F.linear(reread - fields[index], self.field_projections[index].weight)
-            tokens = self.interaction[1](hidden + updates)
+        tokens = self.interaction(tokens)
         return torch.sigmoid(self.score_head(tokens.mean(dim=1)))
