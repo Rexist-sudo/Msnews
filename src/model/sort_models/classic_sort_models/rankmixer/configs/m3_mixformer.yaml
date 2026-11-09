@@ -1,0 +1,48 @@
+name: m3_mixformer
+
+rankmixer_cfg:
+  interaction: mixformer
+  token_count: 8
+  dim: 64
+  layers: 2
+  expansion: 2
+
+dataset:
+  # Windows 下由主进程读取共享 mmap，减少多进程的内存占用。
+  num_workers: 0
+  batch_size: 512
+  pin_memory: true
+  only_test_warm_up_user: false
+  load_npz: true
+
+train_hparams:
+  seed: 42
+  max_epoch: 3
+  val_freq: 0.5
+  lr: 0.001
+  weight_decay: 0.01
+  min_lr: 5.0e-6
+  lr_milestones: [40000, 200000]
+  device: gpu
+  gpus: [0]
+  precision: 32-true
+  grad_clip: 1.0
+  # 控制台和 progress.log 每 100 个优化器 step 输出一次；关闭逐 batch 进度条。
+  log_every_n_steps: 100
+
+validation_guard:
+  enabled: true
+  # 与 M2_2 同 step、M3 上一次半轮验证比较；任一参照八项全差则保留 last.ckpt 并暂停。
+  reference_history: experiments/ranking_study/m2_smooth_seed42/history.json
+
+statistics_cfg:
+  mode: smooth
+  state_dim: 8
+
+mixformer_cfg:
+  architecture_version: 2
+  history_expansion: 1
+  output_expansion: 2
+  position_dim: 16
+  score_hidden_dim: 256
+  dropout: 0.1

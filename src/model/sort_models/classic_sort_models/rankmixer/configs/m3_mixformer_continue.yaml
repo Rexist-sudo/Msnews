@@ -1,0 +1,7 @@
+# 在 m3_mixformer.yaml 之后覆盖；完整 checkpoint 续训，不重新训练前半轮。
+train_hparams:
+  max_epoch: -1
+
+validation_guard:
+  enabled: true
+  mode: previous_validation

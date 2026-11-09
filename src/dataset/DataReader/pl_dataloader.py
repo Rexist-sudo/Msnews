@@ -13,15 +13,45 @@ class EpochRandomSampler(Sampler):
 
     def __init__(self, data, seed=42):
         self.data, self.seed, self.epoch = data, seed, 0
+        self.completed_samples = 0
 
     def __len__(self):
         return len(self.data)
 
     def __iter__(self):
-        return iter(np.random.default_rng(self.seed + self.epoch).permutation(len(self.data)))
+        # 长度仍表示完整 epoch，Lightning 已恢复的 batch 进度负责剩余批次数。
+        order = np.random.default_rng(self.seed + self.epoch).permutation(len(self.data))
+        return iter(order[self.completed_samples:])
 
     def set_epoch(self, epoch):
+        if epoch != self.epoch:
+            self.completed_samples = 0
         self.epoch = epoch
+
+
+class ResumableDataLoader(DataLoader):
+    """保存已完成的样本游标，避免把 worker 预取位置误当成训练进度。
+
+    使用 EpochRandomSampler；callback 在优化完每个 batch 后确认游标。
+    Lightning 通过 state_dict/load_state_dict 在创建迭代器之前恢复游标。
+    """
+
+    def mark_completed(self, epoch: int, batches: int) -> None:
+        self.sampler.set_epoch(epoch)
+        self.sampler.completed_samples = min(batches * self.batch_size, len(self.dataset))
+
+    def state_dict(self) -> dict:
+        return {"epoch": self.sampler.epoch, "completed_samples": self.sampler.completed_samples,
+                "seed": self.sampler.seed, "batch_size": self.batch_size, "rows": len(self.dataset)}
+
+    def load_state_dict(self, state: dict) -> None:
+        for key, value in (("seed", self.sampler.seed), ("batch_size", self.batch_size), ("rows", len(self.dataset))):
+            if state[key] != value:
+                raise ValueError(f"续训 DataLoader 的 {key} 不一致: {state[key]} != {value}")
+        if not 0 <= state["completed_samples"] <= len(self.dataset):
+            raise ValueError(f"非法续训样本游标: {state['completed_samples']}")
+        self.sampler.set_epoch(state["epoch"])
+        self.sampler.completed_samples = state["completed_samples"]
 
 
 class MINDDataModule(pl.LightningDataModule):
@@ -37,6 +67,7 @@ class MINDDataModule(pl.LightningDataModule):
         """
         super().__init__()
         self.save_hyperparameters() # 自动保存 __init__ 参数 (这里只有 conf)
+        self.resume_position = None
 
         
         # 1. 加载配置
@@ -124,8 +155,12 @@ class MINDDataModule(pl.LightningDataModule):
                 self.logger.info("Loading News Data from: {}".format(self.news_file_path))
                 self.news_dataset = reader_cls(config=self.conf, feature_file_path=self.news_file_path)
 
+    def set_resume_position(self, epoch: int, completed_batches: int) -> None:
+        """旧 checkpoint 缺少 loader 状态时，以其已完成 batch 数恢复采样位置。"""
+        self.resume_position = (epoch, completed_batches)
+
     def train_dataloader(self):
-        return DataLoader(
+        loader = ResumableDataLoader(
             self.train_dataset, # type: ignore
             batch_size=self.batch_size,
             sampler=EpochRandomSampler(self.train_dataset, int(self.conf.train_hparams.get("seed", 42))),
@@ -134,6 +169,10 @@ class MINDDataModule(pl.LightningDataModule):
             persistent_workers=True if self.num_workers > 0 else False,
             drop_last=False
         )
+        if self.resume_position is not None:
+            loader.mark_completed(*self.resume_position)
+            self.resume_position = None
+        return loader
 
     def teardown(self, stage=None):
         # Windows 上显式释放 mmap；中断训练后也能重新生成或清理特征。

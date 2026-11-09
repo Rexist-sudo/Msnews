@@ -1,8 +1,0 @@
-name: m3_feedback
-
-statistics_cfg:
-  mode: smooth
-  state_dim: 8
-
-reread_cfg:
-  query_source: feedback
